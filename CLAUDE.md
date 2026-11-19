@@ -44,6 +44,7 @@ rules_openmeter/
     ├── meters_validation_test.sh + testdata/bad_meters/
     ├── e2e_test.sh           # two subjects, two windows, SUM + COUNT, groupBy filter, API-created meter
     ├── invalid_event_test.sh # 4xx for bad events
+    ├── no_lost_events_test.sh # 70 events from the instant of readiness, all queryable and in om_events
     ├── network_blocked_test.sh   # lo only, public addresses unreachable, every listener on loopback
     ├── isolation_test.sh     # read-only cwd/HOME/TMPDIR, nothing outside $TEST_TMPDIR, SIGTERM cleanup
     ├── expect_failure.sh, dies.sh   # server_died_test, backing_timeout_test
@@ -54,7 +55,7 @@ rules_openmeter/
 ## Key concepts
 
 - **Clean environment.** viper's `AutomaticEnv` turns any environment variable into a config override, so OpenMeter runs with `PATH`, `HOME`, `TMPDIR`, `LANG` only.
-- **Readiness.** API: `GET /api/v1/meters` 200 (after migrations, namespace + topic provisioning, meter loading). Sink: its `kafka partition assignment` record for `om_<ns>_events` + `/healthz/ready`. The sink starts after the API (it reads meters from Postgres).
+- **Readiness.** API: `GET /api/v1/meters` 200 (after migrations, namespace + topic provisioning, meter loading). Sink: its `kafka partition assignment` record for `om_<ns>_events` + `/healthz/ready`. The sink starts after the API (it reads meters from Postgres), and after the launcher commits offset 0 for its group on the events topic: upstream hardcodes `auto.offset.reset=latest`, which skipped the first events (see DESIGN.md #10a). Keep `//tests:no_lost_events_test` and the e2e committed-offset check.
 - **Ports.** Three free ports (API, server telemetry, sink telemetry); "address already in use" in a log means a retry with new ports (3 attempts).
 - **rules_pg's pgdata.** It is `$TEST_TMPDIR/pgdata` whatever the server's name; the stack runs Postgres with its own `TEST_TMPDIR`.
 - **Termination.** OpenMeter requires `termination.checkInterval >= 1s`; `propagationTimeout: 0s` makes SIGTERM fast.

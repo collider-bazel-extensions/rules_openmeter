@@ -12,6 +12,16 @@ h2=$(( h1 + 3600 ))
 t() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 from="$(t $h0)"; mid="$(t $h1)"; to="$(t $h2)"
 
+# Before any event: the sink worker's group already has a committed offset
+# (0) on the events topic, so it never falls back to OpenMeter's hardcoded
+# auto.offset.reset=latest (which skips events sent while the assignment's
+# offset lookup is in flight). Without the launcher's reset this is "-".
+desc="$(set -a; source "$OPENMETER_KAFKA_ENV"; set +a; source "$KAFKA_TESTLIB"
+  kafka_cli kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group openmeter-sink-worker 2>&1)"
+committed="$(awk -v t="$OPENMETER_EVENTS_TOPIC" '$2 == t && $3 == 0 {print $4}' <<<"$desc")"
+[[ "$committed" == 0 ]] || { echo "FAIL: sink group's committed offset on $OPENMETER_EVENTS_TOPIC/0 is '$committed', want 0:"; echo "$desc"; exit 1; } >&2
+echo "ok: the sink worker's group starts from a committed offset 0"
+
 start=$(date +%s.%N)
 # One single event, then a batch.
 om_ingest --type prompt --subject alice --time "$(t $((h0 + 60)))" --data '{"tokens": 10, "model": "a"}'

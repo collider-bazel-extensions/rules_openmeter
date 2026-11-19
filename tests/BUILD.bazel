@@ -269,3 +269,12 @@ service_test(
     tags = _NET,
     test = ":composition_test_bin",
 )
+
+# Events ingested from the instant the stack is ready are all kept (the
+# sink's consumer offset is fixed before ready; see DESIGN.md).
+openmeter_test(
+    name = "no_lost_events_test",
+    srcs = ["no_lost_events_test.sh"],
+    meters = _METERS,
+    tags = _NET,
+)

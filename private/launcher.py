@@ -37,6 +37,9 @@ _TAIL = 25
 _STOP_TIMEOUT = 20
 _PORT_ATTEMPTS = 3
 
+# The sink worker's Kafka consumer group (upstream's default, set explicitly).
+SINK_GROUP = "openmeter-sink-worker"
+
 
 def log(msg):
     print(f"[openmeter] {msg}", file=sys.stderr, flush=True)
@@ -208,8 +211,10 @@ sink:
     brokers: {q(kafka["KAFKA_BOOTSTRAP_SERVERS"])}
     brokerAddressFamily: v4
     statsInterval: 0s
-    # The sink may join after the first events were produced.
-    autoOffsetReset: earliest
+    # The group whose offsets the launcher sets to the start of the events
+    # topic before the sink worker starts (see reset_offsets). OpenMeter
+    # hardcodes auto.offset.reset=latest for the sink, whatever is set here.
+    consumerGroupId: {q(SINK_GROUP)}
 
 postgres:
   url: {q(pg_url)}
@@ -312,6 +317,42 @@ def http_get(url, timeout=2):
         return None, b""
 
 
+def reset_offsets(kafka, topic, state_dir, deadline):
+    """Commit offset 0 (the earliest) for the sink worker's consumer group on
+    every partition of the events topic, before the sink worker starts.
+
+    Why: OpenMeter's sink worker hardcodes auto.offset.reset=latest
+    (app/common/openmeter_sinkworker.go: NewSinkKafkaConsumer), so a fresh
+    group starts at the end of the topic. That end is looked up only after
+    the partition is assigned (the "kafka partition assignment" record is
+    logged before), so an event produced in that window, i.e. the first
+    events a test sends the moment the stack is ready, is skipped for good.
+    With a committed offset the consumer starts there and never consults
+    auto.offset.reset. Uses rules_kafka's kafka_cli (one JVM, about a
+    second); the group has no members yet, which --reset-offsets requires."""
+    testlib = kafka.get("KAFKA_TESTLIB")
+    if not testlib:
+        raise Fatal("the kafka env file has no KAFKA_TESTLIB (rules_kafka >= 0.2.0 writes it)")
+    env = {k: v for k, v in kafka.items()}
+    env.update(clean_env(state_dir))
+    env["TEST_TMPDIR"] = state_dir  # kafka_cli's logs and temp files
+    script = ('source "$KAFKA_TESTLIB" && kafka_cli kafka-consumer-groups --bootstrap-server '
+              '"$KAFKA_BOOTSTRAP_SERVERS" --group "$1" --topic "$2" --reset-offsets --to-earliest --execute')
+    last = ""
+    while True:
+        r = subprocess.run(["bash", "-c", script, "reset_offsets", SINK_GROUP, topic], env=env, cwd=state_dir,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        last = r.stdout.strip()
+        rows = [l.split() for l in last.splitlines()]
+        parts = [f for f in rows if len(f) >= 4 and f[0] == SINK_GROUP and f[1] == topic]
+        if r.returncode == 0 and parts and all(f[3] == "0" for f in parts):
+            return len(parts)
+        if time.monotonic() >= deadline:
+            raise Fatal(f"could not set the sink worker's offsets on {topic}:\n" +
+                        "\n".join("  " + l for l in last.splitlines()[-15:]))
+        time.sleep(0.5)
+
+
 def port_clash(path):
     return any("address already in use" in l for l in tail(path, 200))
 
@@ -388,6 +429,9 @@ class Stack:
             with open(sink_cfg, "w") as f:
                 f.write(text.replace(f'address: "127.0.0.1:{stel}"', f'address: "127.0.0.1:{ktel}"', 1))
             t1 = time.monotonic()
+            n = reset_offsets(envs["kafka"], topic, self.state, deadline)
+            t_offsets = time.monotonic() - t1
+            log(f"sink worker group {SINK_GROUP}: offsets of {topic} ({n} partition{'s' if n > 1 else ''}) set to the earliest")
             log("starting the sink worker")
             self.sink = spawn([a.sink_worker, "--config", sink_cfg], self.state, self.sink_log)
             rc = self.wait_until(f"OpenMeter sink worker (assigned {topic})",
@@ -401,7 +445,8 @@ class Stack:
                     continue
                 raise Fatal(f"the OpenMeter sink worker exited (status {rc}) before it was ready:\n" + explain(self.sink_log))
             t_sink = time.monotonic() - t1
-            return dict(url=url, api_port=api, server_tel=stel, sink_tel=ktel, topic=topic, t_api=t_api, t_sink=t_sink)
+            return dict(url=url, api_port=api, server_tel=stel, sink_tel=ktel, topic=topic, t_api=t_api, t_sink=t_sink,
+                        t_offsets=t_offsets)
         raise Fatal("could not bind free ports")
 
     def stop_all(self):
@@ -476,7 +521,8 @@ def serve(a):
     }
     write_env(a.env_file, values)
     log(f"OpenMeter {a.version} ready at {info['url']} in {time.monotonic() - t_start:.1f}s "
-        f"(backing services {t_wait:.1f}s, API server {info['t_api']:.1f}s, sink worker {info['t_sink']:.1f}s)")
+        f"(backing services {t_wait:.1f}s, API server {info['t_api']:.1f}s, sink offsets {info['t_offsets']:.1f}s, "
+        f"sink worker {info['t_sink'] - info['t_offsets']:.1f}s)")
 
     rc = 0
     while not st.stopping:

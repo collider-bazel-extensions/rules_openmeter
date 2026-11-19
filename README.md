@@ -370,8 +370,20 @@ The sink worker buffers events and writes them to ClickHouse when
 comes first. `sink_flush_interval` sets `sink.maxCommitWait` (default here
 250ms, upstream 2s). rules_openmeter also sets `maxPollTimeout` to
 min(100ms, the interval), `namespaceRefetch` and `meterRefetchInterval` to
-1s (upstream 15s), and the sink's Kafka `autoOffsetReset` to `earliest` (it
-may join after the first events).
+1s (upstream 15s).
+
+**No event is lost at start-up.** OpenMeter's sink worker hardcodes
+`auto.offset.reset=latest` for its consumer group (whatever the config
+says), and a fresh group's "latest" is looked up only after its partition
+is assigned. Events produced in that window (exactly the first events a
+test sends the moment the stack is ready) were skipped for good: a test
+saw 7 of 12 tokens. So before the sink worker starts, the launcher commits
+offset 0 on every partition of the events topic for the sink's group
+(`kafka-consumer-groups --reset-offsets --to-earliest --execute`, through
+rules_kafka's `kafka_cli`, about 2 s). The consumer then starts from that
+committed offset and never consults `auto.offset.reset`.
+`//tests:no_lost_events_test` sends 70 events from the instant the stack
+is ready and checks every one is queryable and in ClickHouse.
 
 Measured (`om_wait_value` reports it; on a shared 16-core machine at load
 average 16-42, about 60 waits): from the ingest call returning to the value
@@ -379,17 +391,16 @@ being queryable, **0.01-0.7 s** with the 250ms default (median well under
 0.3 s; many are already queryable on the first poll). From the first
 `om_ingest` call to the last of five events being queryable, including
 three Python helper start-ups, **0.5-1.2 s** (`//tests:e2e_test` prints
-it). In one run of about 60 an event never became queryable within 60 s
-(see the note in DESIGN.md's known limitations); `om_wait_value` now prints
-OpenMeter's WARN/ERROR records when it times out.
+it). On a time-out `om_wait_value` prints OpenMeter's WARN/ERROR records.
 
 Start-up, the whole stack (Kafka, ClickHouse and Postgres in parallel, then
-OpenMeter): **15-28 s** on that machine, mostly the backing services
+OpenMeter): **15-30 s** on that machine, mostly the backing services
 (Kafka's JVM start and `initdb`: 11-21 s). OpenMeter's own part is
-**4-8 s**: the API server 2-6 s (Postgres migrations, 328 of them, run on
-every start against a fresh database), the sink worker 1.2-2.3 s to its
-partition assignment. The launchers log the breakdown:
-`[openmeter] OpenMeter 1.0.0-beta.237 ready at http://127.0.0.1:45073 in 17.1s (backing services 12.1s, API server 3.8s, sink worker 1.2s)`.
+**5-12 s**: the API server 2-6 s (Postgres migrations, 328 of them, run on
+every start against a fresh database), setting the sink's offsets 2-6 s
+(a Kafka CLI JVM), the sink worker 0.2-2 s to its partition assignment.
+The launchers log the breakdown:
+`[openmeter] OpenMeter 1.0.0-beta.237 ready at http://127.0.0.1:43219 in 24.3s (backing services 19.3s, API server 2.6s, sink offsets 2.1s, sink worker 0.2s)`.
 
 ## Metering-only mode
 
@@ -433,7 +444,7 @@ sink:
   namespaceRefetchTimeout: 1s
   meterRefetchInterval: 1s
   dedupe: {enabled: false}
-  kafka: {brokers: "$KAFKA_BOOTSTRAP_SERVERS", brokerAddressFamily: v4, statsInterval: 0s, autoOffsetReset: earliest}
+  kafka: {brokers: "$KAFKA_BOOTSTRAP_SERVERS", brokerAddressFamily: v4, statsInterval: 0s, consumerGroupId: "openmeter-sink-worker"}
 postgres: {url: "postgres://postgres:postgres@127.0.0.1:<port>/openmeter?sslmode=disable", autoMigrate: migration}
 events: {enabled: false}
 portal: {enabled: false}
