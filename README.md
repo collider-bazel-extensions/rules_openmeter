@@ -88,7 +88,7 @@ archive_override(
     module_name = "rules_openmeter",
     urls = ["https://github.com/collider-bazel-extensions/rules_openmeter/archive/refs/tags/v0.1.0.tar.gz"],
     strip_prefix = "rules_openmeter-0.1.0",
-    integrity = "INTEGRITY_AFTER_TAG",
+    integrity = "sha256-IlbjuUrKiTRisrQEBSZP0bS5/vsPQMwnzOSxsWjlrZk=",
 )
 
 # The backing services' rules (public dependencies of rules_openmeter).
