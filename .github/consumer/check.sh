@@ -65,9 +65,10 @@ source "\$OPENMETER_TESTLIB"
 om_ingest --type prompt --subject alice --data '{"tokens": 5}'
 om_ingest --type prompt --subject alice --data '{"tokens": 7}'
 om_ingest --type prompt --subject bob --data '{"tokens": 100}'
+# Each value is waited for: bob's event can be in a later flush than alice's.
 om_wait_value 12 tokens_total --subject alice
-[[ "\$(om_query prompts --subject alice)" == 2 ]]
-[[ "\$(om_query tokens_total --subject bob)" == 100 ]]
+om_wait_value 2 prompts --subject alice
+om_wait_value 100 tokens_total --subject bob
 SH
     chmod +x "$c/usage_test.sh"
     cat > "$c/BUILD.bazel" <<'BUILD'
