@@ -1,0 +1,70 @@
+"""rules_openmeter: a hermetic, per-test OpenMeter (usage metering) for Bazel.
+
+  openmeter_server / openmeter_health_check / openmeter_stack /
+  openmeter_test (see defs.bzl)
+
+Pinned: OpenMeter v1.0.0-beta.237: the `openmeter` and
+`openmeter-sink-worker` binaries, extracted from the digest-pinned image
+ghcr.io/openmeterio/openmeter (no Docker needed). The backing services come
+from this org's rules_kafka, rules_clickhouse and rules_pg.
+"""
+
+module(
+    name = "rules_openmeter",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+# rules_shell is part of the public surface: openmeter_test is an sh_test
+# macro. Bazel 8+ removed `native.sh_test`.
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+# The backing services. Public deps: openmeter_stack / openmeter_test
+# instantiate their servers, and an openmeter_server reads their env files.
+# None of them is in the BCR; archive_override applies only in the root
+# module, so a consumer repeats these overrides (see the README).
+bazel_dep(name = "rules_kafka", version = "0.2.0")
+archive_override(
+    module_name = "rules_kafka",
+    integrity = "sha256-aOwLzVL5C/TyxLSwrcotsmqxHCBXY+B+KlMU3mWT88o=",
+    strip_prefix = "rules_kafka-0.2.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_kafka/archive/refs/tags/v0.2.0.tar.gz"],
+)
+
+# rules_kafka depends on rules_kubectl (not in the BCR either).
+bazel_dep(name = "rules_kubectl", version = "0.1.0")
+git_override(
+    module_name = "rules_kubectl",
+    commit = "bb75b97850b08a18abcdca7af86514561a122b03",  # v0.1.0
+    remote = "https://github.com/collider-bazel-extensions/rules_kubectl",
+)
+
+bazel_dep(name = "rules_clickhouse", version = "0.1.0")
+archive_override(
+    module_name = "rules_clickhouse",
+    integrity = "sha256-fmKpkGUOsR0yAaa1Ah+6E8o8Rj+q5653muRQGxwCbqM=",
+    strip_prefix = "rules_clickhouse-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_clickhouse/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_pg", version = "0.6.1")
+archive_override(
+    module_name = "rules_pg",
+    integrity = "sha256-ODOOXdoCW2uxmoK1QTES5A/vYx8ATvgAMXWHVozreWU=",
+    strip_prefix = "rules_pg-0.6.1",
+    urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.6.1.tar.gz"],
+)
+
+# The hub `@openmeter` (`@openmeter//:binaries`, the rules' default) and its
+# lazy per-platform repos (`@openmeter_<platform>`, fetched only for the
+# platform a build needs). A root module's openmeter.version() overrides
+# this one; consumers need no extension wiring.
+openmeter = use_extension("//:extensions.bzl", "openmeter")
+openmeter.version(version = "1.0.0-beta.237")
+use_repo(openmeter, "openmeter")
+
+# ---- dev-only ------------------------------------------------------------------
+
+bazel_dep(name = "rules_itest", version = "0.0.52", dev_dependency = True)

@@ -1,0 +1,7 @@
+meters:
+  - slug: a
+    eventType: x
+    aggregation: SUM
+    valueProperty: $.v
+    groupBy:
+      model: model

@@ -1,0 +1,6 @@
+meters:
+  - slug: a
+    eventType: x
+    aggregation: COUNT
+sink:
+  minCommitCount: 1

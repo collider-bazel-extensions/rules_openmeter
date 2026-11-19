@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  hermetic:
+    # The whole suite: analysis tests, the build-time meters check, the
+    # end-to-end stack (ingest -> Kafka -> sink worker -> ClickHouse ->
+    # query), invalid events, isolation, failures, two stacks in one
+    # rules_itest service_test and the service-by-service composition.
+    # Every test is tagged block-network, which needs the linux-sandbox.
+    # OpenMeter's binaries come from the digest-pinned image layers (about
+    # 160 MB, cached); Kafka, ClickHouse and Postgres from their rules.
+    name: bazel test (ubuntu-latest, hermetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-hermetic
+          repository-cache: true
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces, which Bazel's
+      # linux-sandbox needs (and with it block-network). Without it Bazel
+      # falls back to a sandbox that can't block the network, and
+      # //tests:network_blocked_test fails.
+      - name: Allow the linux-sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Verify NO host OpenMeter or Docker is used
+        run: |
+          if command -v openmeter >/dev/null 2>&1; then
+            echo "FAIL: a host openmeter is on PATH" >&2; exit 1
+          fi
+
+      # `bazel build //...` would download every platform's binaries
+      # (@openmeter_linux_arm64 too); target paths instead.
+      - name: bazel build
+        run: bazel build //:all //private/... //tests/...
+
+      - name: bazel test
+        run: bazel test //tests/... --test_output=errors --local_test_jobs=2
+
+      - name: Pins match the registry; binaries are static
+        run: tools/update_versions.sh --check
+
+      - name: No OpenMeter, Kafka, ClickHouse or Postgres processes left behind
+        if: always()
+        run: |
+          if ps -eo args | grep -E 'usr/local/bin/openmeter|kafka\.Kafka|clickhouse server|bin/postgres -D' | grep -v grep; then
+            echo "FAIL: processes left running" >&2; exit 1
+          fi
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-testlogs-hermetic
+          path: bazel-testlogs/
+          if-no-files-found: ignore
+
+  consumer:
+    # rules_openmeter as a dependency, from the commit's release archive,
+    # with the README's overrides: an openmeter_test runs offline, a bad
+    # meters file fails the build clearly, version tags resolve or fail
+    # clearly, a warm repository cache needs no registry, and
+    # @rules_openmeter//... loads (tests/ and tools/ are export-ignore'd).
+    name: consumer (ubuntu-latest, git archive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+
+      - name: Allow the linux-sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Consumer checks
+        run: .github/consumer/check.sh "$RUNNER_TEMP/consumer"

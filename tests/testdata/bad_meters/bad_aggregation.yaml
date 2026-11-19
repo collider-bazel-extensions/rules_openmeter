@@ -1,0 +1,5 @@
+meters:
+  - slug: a
+    eventType: x
+    aggregation: MEDIAN
+    valueProperty: $.v

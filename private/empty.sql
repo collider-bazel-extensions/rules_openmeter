@@ -1,0 +1,1 @@
+-- OpenMeter migrates its Postgres database itself (postgres.autoMigrate: migration).

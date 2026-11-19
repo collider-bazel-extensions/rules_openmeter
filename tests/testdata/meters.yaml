@@ -1,0 +1,12 @@
+# The meters the end-to-end tests use.
+meters:
+  - slug: tokens_total
+    description: LLM tokens
+    eventType: prompt
+    aggregation: SUM
+    valueProperty: $.tokens
+    groupBy:
+      model: $.model
+  - slug: prompts
+    eventType: prompt
+    aggregation: COUNT

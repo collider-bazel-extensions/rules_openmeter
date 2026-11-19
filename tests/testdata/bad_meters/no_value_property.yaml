@@ -1,0 +1,4 @@
+meters:
+  - slug: tokens
+    eventType: prompt
+    aggregation: SUM

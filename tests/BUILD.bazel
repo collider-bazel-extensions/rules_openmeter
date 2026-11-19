@@ -1,0 +1,271 @@
+load("@rules_clickhouse//:defs.bzl", "clickhouse_health_check", "clickhouse_server")
+load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_kafka//:defs.bzl", "kafka_server", "kafka_server_health_check")
+load("@rules_pg//:defs.bzl", "pg_health_check", "pg_server", "postgres_schema")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//:defs.bzl", "openmeter_health_check", "openmeter_server", "openmeter_stack", "openmeter_test")
+load(":analysis_tests.bzl", "analysis_test_suite")
+
+# Every test here runs offline: block-network gives the sandbox loopback
+# only (//tests:network_blocked_test proves it).
+_NET = ["block-network"]
+
+_METERS = "//tests/testdata:meters.yaml"
+
+_TESTLIB = {"OPENMETER_TESTLIB_PATH": "$(rootpath //private:testlib.sh)"}
+
+_TESTLIB_DATA = ["//private:testlib.sh", "//private:om.py"]
+
+analysis_test_suite(name = "analysis_tests")
+
+# ---- the meters check ---------------------------------------------------------------
+
+sh_test(
+    name = "meters_validation_test",
+    srcs = ["meters_validation_test.sh"],
+    args = [
+        "$(rootpath //private:validate_meters.py)",
+        "$(rootpath @openmeter//:server)",
+        "$(rootpath %s)" % _METERS,
+        "tests/testdata/bad_meters",
+    ],
+    data = [
+        "//private:validate_meters.py",
+        "//tests/testdata:bad_meters",
+        "@openmeter//:server",
+        _METERS,
+    ],
+    tags = _NET,
+)
+
+# ---- end to end (openmeter_test) ---------------------------------------------------
+
+openmeter_test(
+    name = "e2e_test",
+    srcs = ["e2e_test.sh"],
+    meters = _METERS,
+    tags = _NET,
+)
+
+openmeter_test(
+    name = "invalid_event_test",
+    srcs = ["invalid_event_test.sh"],
+    meters = _METERS,
+    tags = _NET,
+)
+
+openmeter_test(
+    name = "network_blocked_test",
+    srcs = ["network_blocked_test.sh"],
+    meters = _METERS,
+    tags = _NET,
+)
+
+# ---- isolation: read-only cwd/HOME/TMPDIR, nothing outside $TEST_TMPDIR, SIGTERM ---
+
+openmeter_stack(
+    name = "iso_stack",
+    meters = _METERS,
+    tags = ["manual"],
+    testonly = True,
+)
+
+sh_test(
+    name = "isolation_test",
+    size = "large",
+    srcs = ["isolation_test.sh"],
+    args = [
+        "$(rootpath :iso_stack)",
+        "$(rootpath listeners.py)",
+        "$(rootpath //private:testlib.sh)",
+    ],
+    data = [
+        "listeners.py",
+        ":iso_stack",
+    ] + _TESTLIB_DATA,
+    tags = _NET,
+)
+
+# ---- failures ---------------------------------------------------------------------
+
+# OpenMeter's API server dies under a running test: the stack notices, the
+# trampoline stops the test and fails, and nothing is left running.
+openmeter_test(
+    name = "dies",
+    srcs = ["dies.sh"],
+    meters = _METERS,
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "server_died_test",
+    size = "large",
+    srcs = ["expect_failure.sh"],
+    args = [
+        "$(rootpath :dies)",
+        "1",
+        "'the OpenMeter API server exited (status -9)'",
+        "'the openmeter server exited (status 1) while the stack was running'",
+        "'openmeter_test: the OpenMeter stack exited (status 1) while the test was running; the test was stopped'",
+        "--",
+    ] + ["$(rootpath :dies_stack)", "$(rootpath :dies_inner)", "dies_stack", "$(rootpath //private:testlib.sh)"],
+    data = [":dies", ":dies_stack", ":dies_inner"] + _TESTLIB_DATA,
+    tags = _NET,
+)
+
+# An openmeter_server whose backing services never come up.
+openmeter_server(
+    name = "orphan",
+    kafka = ":orphan_kafka",
+    clickhouse = ":orphan_clickhouse",
+    postgres = ":orphan_postgres",
+    ready_timeout = "2",
+    tags = ["manual"],
+)
+
+filegroup(name = "orphan_kafka", tags = ["manual"])
+
+filegroup(name = "orphan_clickhouse", tags = ["manual"])
+
+filegroup(name = "orphan_postgres", tags = ["manual"])
+
+sh_test(
+    name = "backing_timeout_test",
+    srcs = ["expect_failure.sh"],
+    args = [
+        "$(rootpath :orphan)",
+        "1",
+        "'timed out waiting for the backing services'",
+        "orphan_kafka.env",
+        "orphan_clickhouse.env",
+        "orphan_postgres.env",
+    ],
+    data = [":orphan"],
+    tags = _NET,
+)
+
+# ---- rules_itest ------------------------------------------------------------------
+
+# Two whole stacks in one service_test.
+[
+    (
+        openmeter_stack(
+            name = s,
+            meters = _METERS,
+            tags = ["manual"],
+        ),
+        openmeter_health_check(
+            name = s + "_health",
+            server = ":" + s,
+            tags = ["manual"],
+        ),
+        itest_service(
+            name = s + "_svc",
+            exe = ":" + s,
+            health_check = ":" + s + "_health",
+            health_check_timeout = "600s",
+            shutdown_timeout = "90s",
+            tags = ["manual"],
+        ),
+    )
+    for s in ["stack_a", "stack_b"]
+]
+
+sh_test(
+    name = "itest_test_bin",
+    srcs = ["itest_test.sh"],
+    data = _TESTLIB_DATA,
+    env = _TESTLIB,
+    tags = ["manual"],
+)
+
+service_test(
+    name = "itest_test",
+    size = "large",
+    services = [":stack_a_svc", ":stack_b_svc"],
+    tags = _NET,
+    test = ":itest_test_bin",
+)
+
+# The composition, service by service (the README's example).
+kafka_server(name = "om_kafka", tags = ["manual"])
+
+kafka_server_health_check(name = "om_kafka_health", server = ":om_kafka", tags = ["manual"])
+
+clickhouse_server(name = "om_clickhouse", database = "openmeter", tags = ["manual"])
+
+clickhouse_health_check(name = "om_clickhouse_health", server = ":om_clickhouse", tags = ["manual"])
+
+postgres_schema(name = "om_pg_schema", srcs = ["//private:empty.sql"], tags = ["manual"])
+
+pg_server(name = "om_postgres", database = "openmeter", schema = ":om_pg_schema", tags = ["manual"])
+
+pg_health_check(name = "om_postgres_health", server = ":om_postgres", tags = ["manual"])
+
+openmeter_server(
+    name = "om",
+    clickhouse = ":om_clickhouse",
+    kafka = ":om_kafka",
+    meters = _METERS,
+    namespace = "metering",
+    postgres = ":om_postgres",
+    sink_flush_interval = "100ms",
+    tags = ["manual"],
+)
+
+openmeter_health_check(name = "om_health", server = ":om", tags = ["manual"])
+
+itest_service(
+    name = "om_kafka_svc",
+    exe = ":om_kafka",
+    health_check = ":om_kafka_health",
+    health_check_timeout = "300s",
+    shutdown_timeout = "60s",
+    tags = ["manual"],
+)
+
+itest_service(
+    name = "om_clickhouse_svc",
+    exe = ":om_clickhouse",
+    health_check = ":om_clickhouse_health",
+    health_check_timeout = "300s",
+    tags = ["manual"],
+)
+
+itest_service(
+    name = "om_postgres_svc",
+    exe = ":om_postgres",
+    health_check = ":om_postgres_health",
+    health_check_timeout = "300s",
+    tags = ["manual"],
+)
+
+itest_service(
+    name = "om_svc",
+    deps = [
+        ":om_clickhouse_svc",
+        ":om_kafka_svc",
+        ":om_postgres_svc",
+    ],
+    exe = ":om",
+    health_check = ":om_health",
+    health_check_timeout = "300s",
+    shutdown_timeout = "30s",
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "composition_test_bin",
+    srcs = ["composition_test.sh"],
+    data = _TESTLIB_DATA,
+    env = _TESTLIB,
+    tags = ["manual"],
+)
+
+service_test(
+    name = "composition_test",
+    size = "large",
+    services = [":om_svc"],
+    tags = _NET,
+    test = ":composition_test_bin",
+)

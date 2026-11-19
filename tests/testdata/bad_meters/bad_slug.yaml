@@ -1,0 +1,4 @@
+meters:
+  - slug: Tokens-Total
+    eventType: x
+    aggregation: COUNT

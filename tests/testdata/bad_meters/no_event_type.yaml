@@ -1,0 +1,3 @@
+meters:
+  - slug: a
+    aggregation: COUNT

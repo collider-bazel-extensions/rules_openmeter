@@ -1,0 +1,7 @@
+meters:
+  - slug: a
+    eventType: x
+    aggregation: COUNT
+  - slug: a
+    eventType: y
+    aggregation: COUNT

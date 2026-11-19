@@ -1,0 +1,3 @@
+meters:
+  - eventType: x
+    aggregation: COUNT

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# openmeter_stack wrapper: resolves runfiles, execs stack.py.
+set -euo pipefail
+
+if [[ -z "${RUNFILES_DIR:-}" ]]; then
+  if [[ -n "${TEST_SRCDIR:-}" && -d "${TEST_SRCDIR}" ]]; then RUNFILES_DIR="$TEST_SRCDIR"
+  elif [[ -d "${0}.runfiles" ]]; then RUNFILES_DIR="$(cd "${0}.runfiles" && pwd)"
+  fi
+  : "${RUNFILES_DIR:?openmeter_stack: no runfiles found; run it with bazel test or rules_itest}"
+  export RUNFILES_DIR
+fi
+
+resolve() {
+  local p="$1"
+  for c in "${RUNFILES_DIR}/_main/${p}" "${RUNFILES_DIR}/${p}" "${RUNFILES_DIR}/${p#../}"; do
+    [[ -e "$c" ]] && { printf '%s\n' "$c"; return; }
+  done
+  echo "openmeter_stack: not in runfiles: ${p}" >&2
+  exit 1
+}
+
+stack="$(resolve '__STACK__')"
+kafka="$(resolve '__KAFKA__')"
+clickhouse="$(resolve '__CLICKHOUSE__')"
+postgres="$(resolve '__POSTGRES__')"
+openmeter="$(resolve '__OPENMETER__')"
+
+exec python3 -I "$stack" \
+  --name '__NAME__' \
+  --kafka "$kafka" --kafka-name '__KAFKA_NAME__' \
+  --clickhouse "$clickhouse" --clickhouse-name '__CLICKHOUSE_NAME__' \
+  --postgres "$postgres" --postgres-name '__POSTGRES_NAME__' \
+  --openmeter "$openmeter" \
+  --ready-timeout __READY_TIMEOUT__ "$@"
