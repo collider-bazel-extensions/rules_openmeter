@@ -130,7 +130,8 @@ echo "PASS: unsupported version fails clearly"
 
 # 5. Warm repository cache: no registry needed (an unresolvable host).
 c="$(consumer cached 'openmeter = use_extension("@rules_openmeter//:extensions.bzl", "openmeter")
-openmeter.version(version = "'"$default_version"'", registry = "registry.invalid")')"
+openmeter.version(version = "'"$default_version"'", registry = "registry.invalid")
+use_repo(openmeter, "openmeter")')"
 (cd "$c" && bazel build @openmeter//:binaries)
 echo "PASS: with the layers in the repository cache, the binaries fetch with no registry (no token, no network)"
 

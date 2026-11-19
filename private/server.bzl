@@ -64,6 +64,11 @@ def check_log_level(label, level):
     if level not in ["debug", "info", "warn", "error"]:
         fail("{}: log_level = {}: expected debug, info, warn or error.".format(label, repr(level)))
 
+def _display(label):
+    # //pkg:name for the main repository, as users write it.
+    s = str(label)
+    return s[2:] if s.startswith("@@//") else s
+
 def _validate_meters(ctx, validator):
     out = ctx.actions.declare_file(ctx.label.name + ".meters.yaml")
     ctx.actions.run_shell(
@@ -73,7 +78,7 @@ def _validate_meters(ctx, validator):
         command = 'exec python3 -I "$@"',
         arguments = [
             ctx.file._validate.path,
-            str(ctx.label),
+            _display(ctx.label),
             ctx.file.meters.path,
             validator.server.path,
             out.path,

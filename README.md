@@ -374,17 +374,20 @@ min(100ms, the interval), `namespaceRefetch` and `meterRefetchInterval` to
 may join after the first events).
 
 Measured (`om_wait_value` reports it; on a shared 16-core machine at load
-average 16-40): from the ingest call returning to the value being queryable,
-**0.01-0.5 s** with the 250ms default (median about 0.2 s over 40 runs);
-from the first `om_ingest` call to the last of five events being queryable,
-including three Python helper start-ups, **0.6-0.7 s**
-(`//tests:e2e_test` prints it).
+average 16-42, about 60 waits): from the ingest call returning to the value
+being queryable, **0.01-0.7 s** with the 250ms default (median well under
+0.3 s; many are already queryable on the first poll). From the first
+`om_ingest` call to the last of five events being queryable, including
+three Python helper start-ups, **0.5-1.2 s** (`//tests:e2e_test` prints
+it). In one run of about 60 an event never became queryable within 60 s
+(see the note in DESIGN.md's known limitations); `om_wait_value` now prints
+OpenMeter's WARN/ERROR records when it times out.
 
 Start-up, the whole stack (Kafka, ClickHouse and Postgres in parallel, then
-OpenMeter): **15-22 s** on that machine, almost all of it the backing
-services (Kafka's JVM start and `initdb` dominate). OpenMeter's own part is
-**4-6 s**: the API server 2-6 s (Postgres migrations, 328 of them, run on
-every start against a fresh database), the sink worker 1.2-1.7 s to its
+OpenMeter): **15-28 s** on that machine, mostly the backing services
+(Kafka's JVM start and `initdb`: 11-21 s). OpenMeter's own part is
+**4-8 s**: the API server 2-6 s (Postgres migrations, 328 of them, run on
+every start against a fresh database), the sink worker 1.2-2.3 s to its
 partition assignment. The launchers log the breakdown:
 `[openmeter] OpenMeter 1.0.0-beta.237 ready at http://127.0.0.1:45073 in 17.1s (backing services 12.1s, API server 3.8s, sink worker 1.2s)`.
 
@@ -528,7 +531,9 @@ openmeter.version(                                    # any other tag: pin it yo
 The root module's tag wins (other modules' are ignored); the same tag twice
 is fine, two different ones for one `name` fail. A version not pinned in
 `private/versions.bzl` without layer pins fails, naming the supported ones.
-`name = "other"` makes a second hub; pass `binaries = "@other//:binaries"`.
+`name = "other"` makes a second hub; `use_repo(openmeter, "other")` and pass
+`binaries = "@other//:binaries"`. (Naming `@openmeter//...` yourself, e.g.
+`$(rootpath @openmeter//:server)`, likewise needs `use_repo(openmeter, "openmeter")`.)
 (The build-time meters check always runs `@openmeter`'s binary.)
 
 `tools/update_versions.sh <version>` (or `--latest`, from `gh release
